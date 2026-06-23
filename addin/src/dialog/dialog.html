@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recipient Validation Results</title>
+  <!-- Office.js must be loaded from Microsoft CDN in dialogs -->
+  <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    /* ── Reset & base ─────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --brand:        #0f6cbd;
+      --brand-dark:   #0a4b8c;
+      --pass:         #107c10;
+      --pass-bg:      #dff6dd;
+      --fail:         #a4262c;
+      --fail-bg:      #fde7e9;
+      --review:       #8a6900;
+      --review-bg:    #fff4ce;
+      --surface:      #ffffff;
+      --border:       #d1d1d1;
+      --text:         #242424;
+      --text-muted:   #616161;
+      --radius:       6px;
+      --shadow:       0 2px 8px rgba(0,0,0,.12);
+    }
+
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      color: var(--text);
+      background: #f5f5f5;
+      padding: 0;
+      overflow-x: hidden;
+    }
+
+    /* ── Header ───────────────────────────────────────── */
+    .header {
+      background: var(--brand);
+      color: white;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: var(--shadow);
+    }
+    .header-icon { font-size: 22px; }
+    .header h1 { font-size: 16px; font-weight: 600; flex: 1; }
+    #close-btn {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,.5);
+      color: white;
+      padding: 4px 12px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      transition: background .15s;
+    }
+    #close-btn:hover { background: rgba(255,255,255,.15); }
+
+    /* ── Main content ─────────────────────────────────── */
+    main { padding: 16px 20px; max-width: 900px; margin: 0 auto; }
+
+    /* ── Summary card ─────────────────────────────────── */
+    .summary-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      box-shadow: var(--shadow);
+    }
+    .summary-card .label { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+    .summary-card .value { font-size: 14px; font-weight: 500; margin-top: 2px; }
+    .summary-divider { width: 1px; height: 36px; background: var(--border); }
+
+    /* ── Status badge ─────────────────────────────────── */
+    .status-badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 20px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .status-pass   { background: var(--pass-bg);   color: var(--pass); }
+    .status-fail   { background: var(--fail-bg);   color: var(--fail); }
+    .status-review { background: var(--review-bg); color: var(--review); }
+
+    /* ── Table card ───────────────────────────────────── */
+    .table-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      margin-bottom: 16px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .table-card h2 {
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 16px;
+      background: #f0f4f8;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    thead th {
+      background: #f9fafb;
+      font-weight: 600;
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    tbody tr:nth-child(even) { background: #fafafa; }
+    tbody tr:hover { background: #f0f7ff; }
+    tbody td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #ebebeb;
+      vertical-align: top;
+    }
+    .td-name { font-weight: 500; max-width: 160px; word-break: break-all; }
+    .td-emails { font-size: 12px; color: var(--text-muted); max-width: 200px; word-break: break-all; }
+    .mismatched { color: var(--fail) !important; }
+    .empty-row { color: var(--text-muted); text-align: center; padding: 20px; }
+
+    /* ── Override form card ───────────────────────────── */
+    .form-card {
+      background: var(--surface);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      padding: 16px 20px;
+      box-shadow: var(--shadow);
+    }
+    .form-card h2 {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 14px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .form-group { margin-bottom: 14px; }
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 5px;
+      color: var(--text);
+    }
+    .form-group select,
+    .form-group textarea {
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--surface);
+      transition: border-color .15s, box-shadow .15s;
+      resize: vertical;
+    }
+    .form-group select:focus,
+    .form-group textarea:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 2px rgba(15,108,189,.2);
+    }
+
+    .form-group textarea { min-height: 72px; }
+
+    .checkbox-group {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .checkbox-group input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin-top: 1px;
+      flex-shrink: 0;
+      accent-color: var(--brand);
+      cursor: pointer;
+    }
+    .checkbox-group label {
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      line-height: 1.4;
+    }
+
+    .field-error {
+      color: var(--fail);
+      font-size: 12px;
+      margin-top: 4px;
+      display: none;
+    }
+
+    .form-actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+    .close-btn-primary {
+      background: var(--brand);
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .close-btn-primary:hover { background: var(--brand-dark); }
+
+    /* ── Alerts ───────────────────────────────────────── */
+    #global-error, #form-error {
+      background: var(--fail-bg);
+      color: var(--fail);
+      border: 1px solid #f9c8ca;
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 12px;
+      display: none;
+    }
+
+    /* ── Loading ──────────────────────────────────────── */
+    #loading-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+      gap: 12px;
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--brand);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Responsive ───────────────────────────────────── */
+    @media (max-width: 600px) {
+      .summary-card { flex-direction: column; align-items: flex-start; gap: 10px; }
+      .summary-divider { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <span class="header-icon">🔍</span>
+    <h1>Recipient Policy Validation</h1>
+    <button id="close-btn">Close</button>
+  </div>
+
+  <main>
+    <!-- Loading state (shown until data arrives from parent) -->
+    <div id="loading-section">
+      <div class="spinner"></div>
+      <span>Loading validation results…</span>
+    </div>
+
+    <!-- Content (hidden until data arrives) -->
+    <div id="content-section" style="display:none;">
+
+      <div id="global-error" role="alert"></div>
+
+      <!-- Summary -->
+      <div class="summary-card" aria-label="Validation Summary">
+        <div>
+          <div class="label">Overall Status</div>
+          <div class="value"><span id="overall-status" class="status-badge">—</span></div>
+        </div>
+        <div class="summary-divider"></div>
+        <div>
+          <div class="label">Audit Reference</div>
+          <div class="value" id="audit-ref">—</div>
+        </div>
+      </div>
+
+      <!-- Attachment results table -->
+      <div class="table-card">
+        <h2>📎 Attachment Results</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Policy ID</th>
+              <th>Status</th>
+              <th>Authorised Emails</th>
+              <th>Mismatched Recipients</th>
+            </tr>
+          </thead>
+          <tbody id="attachment-tbody">
+            <!-- populated by dialog.ts -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Actions Section -->
+      <div id="actions-section" style="margin-top: 24px; display: flex; justify-content: flex-end;">
+        <button id="bottom-close-btn" class="close-btn-primary">Close Window</button>
+      </div>
+
+    </div><!-- /content-section -->
+  </main>
+
+  <!-- Bundled by webpack — output path: /dialog/dialog.bundle.js -->
+  <script type="text/javascript" src="dialog.bundle.js"></script>
+</body>
+</html>
