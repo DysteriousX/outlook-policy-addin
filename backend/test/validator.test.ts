@@ -9,9 +9,17 @@ import {
   validateAttachment,
   aggregateStatus,
   validate,
+  extractPolicyIdFromText,
 } from "../src/services/validator";
 import type { PolicyAdminClient } from "../src/services/policyAdminClient";
 import type { AttachmentInput, AttachmentResult } from "../src/types";
+
+// Mock pdf-parse to return the buffer contents as text directly for easy test verification
+jest.mock("pdf-parse", () => {
+  return jest.fn().mockImplementation((buffer: Buffer) => {
+    return Promise.resolve({ text: buffer.toString("utf8") });
+  });
+});
 
 // ─── Mock Policy Admin Client ─────────────────────────────────────────────────
 const mockClient: PolicyAdminClient = {
@@ -241,5 +249,46 @@ describe("validate", () => {
       mockClient
     );
     expect(result.overallStatus).toBe("PASS");
+  });
+
+  describe("extractPolicyIdFromText", () => {
+    it("extracts from POL123456 format", () => {
+      expect(extractPolicyIdFromText("This is document POL123456")).toBe("123456");
+      expect(extractPolicyIdFromText("This is document POL-98765")).toBe("98765");
+    });
+
+    it("extracts from Policy Number formats", () => {
+      expect(extractPolicyIdFromText("Policy Number: 123456")).toBe("123456");
+      expect(extractPolicyIdFromText("Policy No. 98765")).toBe("98765");
+      expect(extractPolicyIdFromText("Policy# 123456")).toBe("123456");
+    });
+
+    it("extracts from fallback standalone digit sequences", () => {
+      expect(extractPolicyIdFromText("Reference ID 98765 is active")).toBe("98765");
+    });
+
+    it("returns undefined when no policy ID matches", () => {
+      expect(extractPolicyIdFromText("Hello world 123")).toBeUndefined();
+    });
+  });
+
+  describe("PDF content validation fallback", () => {
+    it("reads policy ID from PDF content if not in filename", async () => {
+      const att: AttachmentInput = {
+        id: "pdf-content-test",
+        name: "invoice.pdf", // no policyId in filename
+        size: 5000,
+        content: Buffer.from("This email contains policy detail for Policy No: 123456").toString("base64"),
+      };
+
+      const result = await validateAttachment(
+        att,
+        ["holder1@example.com"],
+        mockClient
+      );
+
+      expect(result.status).toBe("PASS");
+      expect(result.policyId).toBe("123456");
+    });
   });
 });

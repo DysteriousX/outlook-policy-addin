@@ -109,6 +109,28 @@ function getAttachmentsFromItem(item: any): Promise<AttachmentInput[]> {
   });
 }
 
+/**
+ * Safely read attachment content using Office.js.
+ * Returns a Promise resolving to the Base64 string of the file.
+ */
+function getAttachmentContent(attachmentId: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const item = Office.context.mailbox.item;
+    if (!item || typeof item.getAttachmentContentAsync !== "function") {
+      reject(new Error("getAttachmentContentAsync is not supported on this Outlook client."));
+      return;
+    }
+    item.getAttachmentContentAsync(attachmentId, (result) => {
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        // result.value.content contains the base64 encoded string
+        resolve(result.value.content);
+      } else {
+        reject(new Error(result.error.message || `Failed to read attachment ${attachmentId}`));
+      }
+    });
+  });
+}
+
 // ─── Dialog URL helper ────────────────────────────────────────────────────────
 /**
  * Build the absolute URL for the dialog page.
@@ -175,10 +197,25 @@ export async function ValidateRecipients(
       return;
     }
 
-    // 3. Call the backend.
+    // 3. Fetch Base64 PDF contents in parallel.
+    const attachmentsWithContent = await Promise.all(
+      attachments.map(async (att) => {
+        if (att.name.toLowerCase().endsWith(".pdf")) {
+          try {
+            const content = await getAttachmentContent(att.id);
+            return { ...att, content };
+          } catch (e) {
+            console.warn(`[commands] Failed to read content for attachment ${att.name}:`, e);
+          }
+        }
+        return att;
+      })
+    );
+
+    // 4. Call the backend.
     const validationResult: ValidateResponse = await validateRecipients({
       recipients: allRecipients,
-      attachments,
+      attachments: attachmentsWithContent,
     });
 
     // 4. Handle result.

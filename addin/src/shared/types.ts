@@ -7,6 +7,7 @@ export interface AttachmentInput {
   name: string;
   size: number;
   policyId?: string;
+  content?: string; // base64 encoded pdf content
 }
 
 export interface ValidateRequest {

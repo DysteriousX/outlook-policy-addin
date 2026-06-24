@@ -5,6 +5,8 @@
  */
 
 import { randomUUID } from "crypto";
+import pdf = require("pdf-parse");
+import { POLICY_ID_PATTERNS } from "../config";
 import type {
   AttachmentInput,
   AttachmentResult,
@@ -24,55 +26,86 @@ export function normaliseEmail(email: string): string {
   return email.toLowerCase().trim();
 }
 
+/**
+ * Attempt to extract a policy ID from text content using the configured patterns.
+ */
+export function extractPolicyIdFromText(text: string): string | undefined {
+  for (const pattern of POLICY_ID_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[1] || match[0];
+    }
+  }
+  return undefined;
+}
+
 // ─── Attachment validation ─────────────────────────────────────────────────────
 /**
  * Validate a single attachment against the list of recipients.
  *
  * Rules:
- *  - No policyId → REVIEW
- *  - policyId found, all recipients in authorisedEmails → PASS
- *  - policyId found, some recipients not in authorisedEmails → FAIL
+ *  - No policyId -> REVIEW
+ *  - policyId found, all recipients in authorisedEmails -> PASS
+ *  - policyId found, some recipients not in authorisedEmails -> FAIL
  */
 export async function validateAttachment(
   attachment: AttachmentInput,
   normalisedRecipients: string[],
   client: PolicyAdminClient
 ): Promise<AttachmentResult> {
+  let policyId = attachment.policyId;
+
+  // If base64 content is provided and it's a PDF, try to extract policy ID from text content
+  if (attachment.content && attachment.name.toLowerCase().endsWith(".pdf")) {
+    try {
+      const buffer = Buffer.from(attachment.content, "base64");
+      const pdfData = await (pdf as any)(buffer);
+      const text = pdfData.text;
+      const textPolicyId = extractPolicyIdFromText(text);
+      if (textPolicyId) {
+        policyId = textPolicyId;
+        console.info(`[validator] Extracted policy ID "${policyId}" from PDF text for ${attachment.name}`);
+      }
+    } catch (err) {
+      console.warn(`[validator] Failed to parse PDF text for ${attachment.name}:`, err);
+    }
+  }
+
   const base = {
     id: attachment.id,
     name: attachment.name,
-    policyId: attachment.policyId,
+    policyId,
   };
 
-  // No policyId extracted from filename → REVIEW.
-  if (!attachment.policyId) {
+  // No policyId found either in filename or text -> REVIEW.
+  if (!policyId) {
     return {
       ...base,
       status: "REVIEW" as AttachmentStatus,
       authorisedEmails: [],
       mismatchedRecipients: [],
-      reason: "No policy ID could be extracted from the attachment filename.",
+      reason: "No policy ID could be extracted from the attachment filename or content.",
     };
   }
 
   // Lookup authorised emails from the Policy Admin client.
-  const authorisedEmails = await client.getAuthorisedEmails(attachment.policyId);
+  const authorisedEmails = await client.getAuthorisedEmails(policyId);
 
-  // Unknown policy ID → REVIEW (not enough info to FAIL definitively).
+  // Unknown policy ID -> REVIEW (not enough info to FAIL definitively).
   if (authorisedEmails.length === 0) {
     return {
       ...base,
       status: "REVIEW" as AttachmentStatus,
       authorisedEmails: [],
       mismatchedRecipients: [],
-      reason: `Policy ID "${attachment.policyId}" is not recognised in the policy system.`,
+      reason: `Policy ID "${policyId}" is not recognised in the policy system.`,
     };
   }
 
   // Determine mismatched recipients.
   const authorisedSet = new Set(authorisedEmails.map(normaliseEmail));
   const mismatchedRecipients = normalisedRecipients.filter(
-    (r) => !authorisedSet.has(r)
+    (r) => !authorisedSet.has(normaliseEmail(r))
   );
 
   const status: AttachmentStatus =
