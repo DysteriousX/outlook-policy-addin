@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from "crypto";
-import pdf = require("pdf-parse");
+import { PDFParse, PasswordException } from "pdf-parse";
 import { POLICY_ID_PATTERNS } from "../config";
 import type {
   AttachmentInput,
@@ -39,6 +39,13 @@ export function extractPolicyIdFromText(text: string): string | undefined {
   return undefined;
 }
 
+export class PasswordRequiredError extends Error {
+  constructor(public attachmentName: string) {
+    super(`Attachment "${attachmentName}" is password-protected and requires a password.`);
+    this.name = "PasswordRequiredError";
+  }
+}
+
 // ─── Attachment validation ─────────────────────────────────────────────────────
 /**
  * Validate a single attachment against the list of recipients.
@@ -51,7 +58,8 @@ export function extractPolicyIdFromText(text: string): string | undefined {
 export async function validateAttachment(
   attachment: AttachmentInput,
   normalisedRecipients: string[],
-  client: PolicyAdminClient
+  client: PolicyAdminClient,
+  password?: string
 ): Promise<AttachmentResult> {
   let policyId = attachment.policyId;
 
@@ -59,14 +67,21 @@ export async function validateAttachment(
   if (attachment.content && attachment.name.toLowerCase().endsWith(".pdf")) {
     try {
       const buffer = Buffer.from(attachment.content, "base64");
-      const pdfData = await (pdf as any)(buffer);
+      const parser = new PDFParse({
+        data: buffer,
+        password: password
+      });
+      const pdfData = await parser.getText();
       const text = pdfData.text;
       const textPolicyId = extractPolicyIdFromText(text);
       if (textPolicyId) {
         policyId = textPolicyId;
         console.info(`[validator] Extracted policy ID "${policyId}" from PDF text for ${attachment.name}`);
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err instanceof PasswordException || (err && (err.name === "PasswordException" || err.message?.toLowerCase().includes("password")))) {
+        throw new PasswordRequiredError(attachment.name);
+      }
       console.warn(`[validator] Failed to parse PDF text for ${attachment.name}:`, err);
     }
   }
@@ -141,15 +156,19 @@ export function aggregateStatus(results: AttachmentResult[]): OverallStatus {
  */
 export async function validate(
   request: ValidateRequest,
-  client: PolicyAdminClient
+  client: PolicyAdminClient,
+  password?: string
 ): Promise<ValidateResponse> {
+  if (!Array.isArray(request.recipients) || !Array.isArray(request.attachments)) {
+    throw new Error("Invalid validation request: missing recipients or attachments.");
+  }
   // Normalise recipients once.
   const normalisedRecipients = request.recipients.map(normaliseEmail);
 
   // Validate all attachments in parallel.
   const attachmentResults = await Promise.all(
     request.attachments.map((att) =>
-      validateAttachment(att, normalisedRecipients, client)
+      validateAttachment(att, normalisedRecipients, client, password)
     )
   );
 

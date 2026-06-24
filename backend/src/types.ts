@@ -12,8 +12,10 @@ export interface AttachmentInput {
 }
 
 export interface ValidateRequest {
-  recipients: string[];
-  attachments: AttachmentInput[];
+  recipients?: string[];
+  attachments?: AttachmentInput[];
+  auditRef?: string;
+  password?: string;
 }
 
 export type AttachmentStatus = "PASS" | "FAIL" | "REVIEW";
@@ -28,7 +30,7 @@ export interface AttachmentResult {
   reason?: string;
 }
 
-export type OverallStatus = "PASS" | "FAIL" | "REVIEW";
+export type OverallStatus = "PASS" | "FAIL" | "REVIEW" | "PASSWORD_REQUIRED";
 
 export interface ValidateResponse {
   overallStatus: OverallStatus;

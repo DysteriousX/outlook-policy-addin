@@ -11,7 +11,7 @@
  *     via Office.context.ui.messageParent().
  */
 
-import { getValidationResult } from "../shared/apiClient";
+import { getValidationResult, validateRecipients } from "../shared/apiClient";
 import type {
   ValidateResponse,
   AttachmentResult,
@@ -90,6 +90,18 @@ function renderValidationResult(data: ValidateResponse): void {
   hideById("loading-section");
   showById("content-section");
 
+  if (data.overallStatus === "PASSWORD_REQUIRED") {
+    showById("password-section");
+    hideById("summary-card");
+    hideById("table-card");
+    setupPasswordForm(data.auditRef);
+    return;
+  } else {
+    hideById("password-section");
+    showById("summary-card");
+    showById("table-card");
+  }
+
   // Overall status badge.
   const statusEl = getEl("overall-status");
   statusEl.textContent = data.overallStatus;
@@ -100,6 +112,63 @@ function renderValidationResult(data: ValidateResponse): void {
 
   // Per-attachment table.
   renderAttachmentTable(data.attachmentResults);
+}
+
+function setupPasswordForm(auditRef: string): void {
+  const form = document.getElementById("password-form") as HTMLFormElement | null;
+  if (!form) return;
+
+  // Remove any existing event listener by cloning/replacing
+  const newForm = form.cloneNode(true) as HTMLFormElement;
+  form.parentNode?.replaceChild(newForm, form);
+
+  const errorEl = document.getElementById("password-error");
+  if (errorEl) {
+    errorEl.style.display = "none";
+    errorEl.textContent = "";
+  }
+
+  const passwordInput = newForm.querySelector("#pdf-password") as HTMLInputElement | null;
+  if (passwordInput) {
+    passwordInput.value = "";
+    passwordInput.focus();
+  }
+
+  newForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (errorEl) {
+      errorEl.style.display = "none";
+      errorEl.textContent = "";
+    }
+
+    const password = passwordInput?.value ?? "";
+    const submitBtn = newForm.querySelector("#submit-password-btn") as HTMLButtonElement | null;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Validating...";
+    }
+
+    try {
+      const result = await validateRecipients({ auditRef, password });
+      currentValidation = result;
+      renderValidationResult(result);
+    } catch (err: any) {
+      console.error("[dialog] Password validation failed:", err);
+      if (errorEl) {
+        if (err && err.message && err.message.includes("INCORRECT_PASSWORD")) {
+          errorEl.textContent = "Incorrect password. Please try again.";
+        } else {
+          errorEl.textContent = err?.message || "An error occurred during validation.";
+        }
+        errorEl.style.display = "block";
+      }
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Validate";
+      }
+    }
+  });
 }
 
 function renderAttachmentTable(results: AttachmentResult[]): void {

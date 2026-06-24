@@ -223,7 +223,7 @@ export async function ValidateRecipients(
       showPassNotification(validationResult.auditRef);
       done();
     } else {
-      // FAIL or REVIEW → open dialog.
+      // FAIL, REVIEW, or PASSWORD_REQUIRED → open dialog.
       await openResultDialog(validationResult, item, done);
       // Note: done() is called inside openResultDialog after dialog closes.
     }

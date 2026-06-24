@@ -5,13 +5,14 @@
  * Easily unit-testable (see test/validator.test.ts).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.PasswordRequiredError = void 0;
 exports.normaliseEmail = normaliseEmail;
 exports.extractPolicyIdFromText = extractPolicyIdFromText;
 exports.validateAttachment = validateAttachment;
 exports.aggregateStatus = aggregateStatus;
 exports.validate = validate;
 const crypto_1 = require("crypto");
-const pdf = require("pdf-parse");
+const pdf_parse_1 = require("pdf-parse");
 const config_1 = require("../config");
 // ─── Normalisation helper ─────────────────────────────────────────────────────
 /**
@@ -33,6 +34,14 @@ function extractPolicyIdFromText(text) {
     }
     return undefined;
 }
+class PasswordRequiredError extends Error {
+    constructor(attachmentName) {
+        super(`Attachment "${attachmentName}" is password-protected and requires a password.`);
+        this.attachmentName = attachmentName;
+        this.name = "PasswordRequiredError";
+    }
+}
+exports.PasswordRequiredError = PasswordRequiredError;
 // ─── Attachment validation ─────────────────────────────────────────────────────
 /**
  * Validate a single attachment against the list of recipients.
@@ -42,13 +51,17 @@ function extractPolicyIdFromText(text) {
  *  - policyId found, all recipients in authorisedEmails -> PASS
  *  - policyId found, some recipients not in authorisedEmails -> FAIL
  */
-async function validateAttachment(attachment, normalisedRecipients, client) {
+async function validateAttachment(attachment, normalisedRecipients, client, password) {
     let policyId = attachment.policyId;
     // If base64 content is provided and it's a PDF, try to extract policy ID from text content
     if (attachment.content && attachment.name.toLowerCase().endsWith(".pdf")) {
         try {
             const buffer = Buffer.from(attachment.content, "base64");
-            const pdfData = await pdf(buffer);
+            const parser = new pdf_parse_1.PDFParse({
+                data: buffer,
+                password: password
+            });
+            const pdfData = await parser.getText();
             const text = pdfData.text;
             const textPolicyId = extractPolicyIdFromText(text);
             if (textPolicyId) {
@@ -57,6 +70,9 @@ async function validateAttachment(attachment, normalisedRecipients, client) {
             }
         }
         catch (err) {
+            if (err instanceof pdf_parse_1.PasswordException || (err && (err.name === "PasswordException" || err.message?.toLowerCase().includes("password")))) {
+                throw new PasswordRequiredError(attachment.name);
+            }
             console.warn(`[validator] Failed to parse PDF text for ${attachment.name}:`, err);
         }
     }
@@ -89,7 +105,7 @@ async function validateAttachment(attachment, normalisedRecipients, client) {
     }
     // Determine mismatched recipients.
     const authorisedSet = new Set(authorisedEmails.map(normaliseEmail));
-    const mismatchedRecipients = normalisedRecipients.filter((r) => !authorisedSet.has(r));
+    const mismatchedRecipients = normalisedRecipients.filter((r) => !authorisedSet.has(normaliseEmail(r)));
     const status = mismatchedRecipients.length === 0 ? "PASS" : "FAIL";
     return {
         ...base,
@@ -119,11 +135,14 @@ function aggregateStatus(results) {
  * Validate all recipients against all attachments.
  * Returns a full ValidateResponse with audit reference.
  */
-async function validate(request, client) {
+async function validate(request, client, password) {
+    if (!Array.isArray(request.recipients) || !Array.isArray(request.attachments)) {
+        throw new Error("Invalid validation request: missing recipients or attachments.");
+    }
     // Normalise recipients once.
     const normalisedRecipients = request.recipients.map(normaliseEmail);
     // Validate all attachments in parallel.
-    const attachmentResults = await Promise.all(request.attachments.map((att) => validateAttachment(att, normalisedRecipients, client)));
+    const attachmentResults = await Promise.all(request.attachments.map((att) => validateAttachment(att, normalisedRecipients, client, password)));
     // Edge case: no attachments → REVIEW (nothing to validate against).
     if (attachmentResults.length === 0) {
         return {

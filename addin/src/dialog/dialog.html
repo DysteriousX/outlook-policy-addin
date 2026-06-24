@@ -289,8 +289,26 @@
 
       <div id="global-error" role="alert"></div>
 
+      <!-- Password Section -->
+      <div id="password-section" class="form-card" style="display: none; margin-bottom: 16px;">
+        <h2>🔑 Password Required</h2>
+        <p style="margin-bottom: 12px; font-size: 13px; color: var(--text-muted);">
+          One or more attached PDF files are password-protected. Please enter the password to validate them.
+        </p>
+        <div id="password-error" style="background: var(--fail-bg); color: var(--fail); border: 1px solid #f9c8ca; border-radius: var(--radius); padding: 10px 14px; font-size: 13px; margin-bottom: 12px; display: none;"></div>
+        <form id="password-form" onsubmit="return false;">
+          <div class="form-group">
+            <label for="pdf-password">PDF Password</label>
+            <input type="password" id="pdf-password" style="width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); font-family: inherit; font-size: 13px;" required />
+          </div>
+          <div class="form-actions" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px;">
+            <button type="submit" id="submit-password-btn" class="close-btn-primary">Validate</button>
+          </div>
+        </form>
+      </div>
+
       <!-- Summary -->
-      <div class="summary-card" aria-label="Validation Summary">
+      <div id="summary-card" class="summary-card" aria-label="Validation Summary">
         <div>
           <div class="label">Overall Status</div>
           <div class="value"><span id="overall-status" class="status-badge">—</span></div>
@@ -303,7 +321,7 @@
       </div>
 
       <!-- Attachment results table -->
-      <div class="table-card">
+      <div id="table-card" class="table-card">
         <h2>📎 Attachment Results</h2>
         <table>
           <thead>

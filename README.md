@@ -4,6 +4,16 @@ A production-ready MVP Outlook Add-in that validates email recipients against au
 
 ---
 
+## Key Features
+
+1. **Production-Grade PDF Text Extraction:** Parses attached PDF files on the backend to extract policy numbers from the page text.
+2. **Flexible & Configurable Regex:** Extraction regex patterns are configured in a central configuration file (`backend/src/config.ts`).
+3. **Parallel Attachment Reading:** Processes multiple attachments in parallel, reading Base64 contents asynchronously on the client and parsing them concurrently on the backend.
+4. **Password-Protected PDF Support:** Detects encrypted PDFs, prompting the user securely inside the review dialog for the password and validating it against the backend. All encrypted PDFs in a single email are assumed to share the same password.
+5. **Read-Only Review Screen:** Displays validation statuses and mismatched recipients in a clean, read-only table interface. The Warn & Override form has been removed.
+
+---
+
 ## Project Structure
 
 ```
@@ -11,16 +21,16 @@ outlook-policy-addin/
 ├── addin/                          # Office.js Add-in (TypeScript + Webpack)
 │   ├── src/
 │   │   ├── commands/
-│   │   │   ├── commands.ts         # Ribbon button handler (ValidateRecipients)
+│   │   │   ├── commands.ts         # Ribbon button handler (ValidateRecipients + Parallel content fetching)
 │   │   │   └── commands.html       # Invisible FunctionFile host page
 │   │   ├── dialog/
-│   │   │   ├── dialog.ts           # Dialog page logic
-│   │   │   └── dialog.html         # Dialog HTML + CSS
+│   │   │   ├── dialog.ts           # Dialog page logic (handles password validation prompts)
+│   │   │   └── dialog.html         # Dialog HTML + CSS (password card & read-only results table)
 │   │   ├── taskpane/
 │   │   │   ├── taskpane.ts         # Minimal taskpane bootstrap
 │   │   │   └── taskpane.html       # Placeholder taskpane page
 │   │   └── shared/
-│   │       ├── apiClient.ts        # Typed fetch client (SSO + /validate + /override)
+│   │       ├── apiClient.ts        # Typed fetch client (SSO + /validate)
 │   │       └── types.ts            # Shared TypeScript interfaces
 │   ├── assets/                     # Icon files (PNG)
 │   ├── manifest.xml                # Office Add-in manifest
@@ -30,13 +40,14 @@ outlook-policy-addin/
 └── backend/                        # Node.js + Express backend (TypeScript)
     ├── src/
     │   ├── index.ts                # Express server entry point
+    │   ├── config.ts               # Configurable policy extraction regex patterns
     │   ├── types.ts                # Backend TypeScript types
     │   ├── routes/
-    │   │   ├── validate.ts         # POST /validate
-    │   │   └── override.ts         # POST /override
+    │   │   └── validate.ts         # POST /validate (handles initial validation & password submissions)
     │   ├── services/
     │   │   ├── policyAdminClient.ts # Stubbed policy lookup
-    │   │   └── validator.ts        # Pure validation logic
+    │   │   ├── resultStore.ts      # In-memory store caching results & pending requests
+    │   │   └── validator.ts        # Pure validation logic (pdf-parse integration)
     │   └── middleware/
     │       └── auth.ts             # JWT extraction (MVP, no sig verification)
     ├── test/
@@ -72,7 +83,6 @@ The backend starts at **http://localhost:3001**. You should see:
 ```
 ✅ Backend server listening on http://localhost:3001
    POST http://localhost:3001/validate
-   POST http://localhost:3001/override
    GET  http://localhost:3001/health
 ```
 
@@ -134,13 +144,6 @@ https://localhost:3000/taskpane/taskpane.html  → taskpane placeholder
 7. Click **Get Add-ins** (or **My Add-ins**) in the ribbon → **Shared Folder** → find **Recipient Policy Validator** → **Add**.
 8. The **Validate Recipients** button appears in the compose ribbon.
 
-**Alternative (faster) via PowerShell:**
-```powershell
-# Installs the manifest from a local file path
-$manifestPath = "C:\path\to\outlook-policy-addin\addin\manifest.xml"
-# Use the Office Add-in Sideloader or the method above
-```
-
 #### Mac (Outlook Desktop)
 
 1. Open Outlook.
@@ -150,31 +153,29 @@ $manifestPath = "C:\path\to\outlook-policy-addin\addin\manifest.xml"
 5. Confirm the security prompt.
 6. Open a compose window — the **Validate Recipients** button appears in the ribbon.
 
-**Alternative via terminal:**
-```bash
-# Copy manifest to the Outlook add-in directory on Mac
-cp addin/manifest.xml ~/Library/Containers/com.microsoft.Outlook/Data/Documents/wef/
-# Then restart Outlook and the add-in auto-loads.
-```
-
 ---
 
-### Step 5 — Test the Add-in
+### Step 5 — Test the Add-in Scenarios
 
 1. Open a **new email** in Outlook.
-2. Add an attachment named `POL123456_summary.pdf`.
-3. Add recipient `holder1@example.com` in To.
-4. Click **Validate Recipients** in the ribbon.
-5. ✅ You should see an **Outlook notification**: `Validation PASSED. Audit ref: AUD-XXXXXXXX`
+2. Add recipient `holder1@example.com` in the **To** field.
 
-**Test FAIL scenario:**
-- Add recipient `intruder@evil.com` alongside `holder1@example.com`.
-- Click **Validate Recipients**.
-- A **dialog** opens showing FAIL status, the mismatched recipient, and the override form.
+#### Scenario A: Pass (PDF Content Parsing)
+* Attach a file named `invoice.pdf` (no policy ID in the filename) containing the text: `Policy Number: 123456`.
+* Click **Validate Recipients** in the ribbon.
+* ✅ You should see an **Outlook notification**: `Validation PASSED. Audit ref: AUD-XXXXXXXX`
 
-**Test REVIEW scenario:**
-- Attach a file named `invoice.pdf` (no policy ID pattern).
-- The dialog opens with REVIEW status.
+#### Scenario B: Fail (Mismatched Recipient)
+* Add recipient `intruder@evil.com` alongside `holder1@example.com`.
+* Click **Validate Recipients**.
+* A **dialog** opens showing the FAIL status and lists `intruder@evil.com` under mismatched recipients.
+
+#### Scenario C: Password-Protected PDF Validation
+* Attach a password-protected PDF file (which contains policy ID `123456` when decrypted).
+* Click **Validate Recipients**.
+* A **dialog** opens displaying a **Password Required** screen.
+* Enter the password (`correct_password` in mock setup) and click **Validate**.
+* The password card disappears and the read-only review screen renders the successfully validated attachment results.
 
 ---
 
@@ -182,17 +183,25 @@ cp addin/manifest.xml ~/Library/Containers/com.microsoft.Outlook/Data/Documents/
 
 ### POST /validate
 
+#### 1. Initial Validation Request
+Sends recipient list + attachment metadata and Base64 content to the backend.
+
 **Request:**
 ```json
 {
-  "recipients": ["holder1@example.com", "holder2@example.com"],
+  "recipients": ["holder1@example.com"],
   "attachments": [
-    { "id": "att1", "name": "POL123456_policy.pdf", "size": 12345, "policyId": "123456" }
+    { 
+      "id": "att1", 
+      "name": "invoice.pdf", 
+      "size": 12345, 
+      "content": "JVBERi0xLjQKJ..." 
+    }
   ]
 }
 ```
 
-**Response (200):**
+**Response (200 - Pass):**
 ```json
 {
   "overallStatus": "PASS",
@@ -200,7 +209,7 @@ cp addin/manifest.xml ~/Library/Containers/com.microsoft.Outlook/Data/Documents/
   "attachmentResults": [
     {
       "id": "att1",
-      "name": "POL123456_policy.pdf",
+      "name": "invoice.pdf",
       "policyId": "123456",
       "status": "PASS",
       "authorisedEmails": ["holder1@example.com"],
@@ -210,24 +219,59 @@ cp addin/manifest.xml ~/Library/Containers/com.microsoft.Outlook/Data/Documents/
 }
 ```
 
-### POST /override
+**Response (200 - Password Required):**
+If a PDF is password protected, the backend caches the payload and returns:
+```json
+{
+  "overallStatus": "PASSWORD_REQUIRED",
+  "auditRef": "AUD-PENDING12",
+  "attachmentResults": [
+    {
+      "id": "att1",
+      "name": "locked.pdf",
+      "policyId": null,
+      "status": "REVIEW",
+      "authorisedEmails": [],
+      "mismatchedRecipients": [],
+      "reason": "Password required"
+    }
+  ]
+}
+```
+
+#### 2. Password Submission Request
+Once the user enters the password in the dialog, the client submits:
 
 **Request:**
 ```json
 {
-  "auditRef": "AUD-AB12CD34",
-  "reasonCode": "AUTHORISED_EXCEPTION",
-  "reasonText": "Broker authorised by underwriter on call ref UC-2024-001",
-  "confirmedByUser": true
+  "auditRef": "AUD-PENDING12",
+  "password": "correct_password"
 }
 ```
 
-**Response (201):**
+**Response (200 - Success):**
 ```json
 {
-  "overrideRef": "OVR-EF56GH78",
-  "auditRef": "AUD-AB12CD34",
-  "recordedAt": "2024-01-15T10:30:00.000Z"
+  "overallStatus": "PASS",
+  "auditRef": "AUD-PENDING12",
+  "attachmentResults": [
+    {
+      "id": "att1",
+      "name": "locked.pdf",
+      "policyId": "123456",
+      "status": "PASS",
+      "authorisedEmails": ["holder1@example.com"],
+      "mismatchedRecipients": []
+    }
+  ]
+}
+```
+
+**Response (400 - Incorrect Password):**
+```json
+{
+  "error": "INCORRECT_PASSWORD"
 }
 ```
 
@@ -240,11 +284,6 @@ cp addin/manifest.xml ~/Library/Containers/com.microsoft.Outlook/Data/Documents/
 | `123456`  | `holder1@example.com` |
 | `98765`   | `holder2@example.com`, `holder2.alt@example.com` |
 
-Filename patterns recognised:
-- `POL123456_*.pdf` → policyId = `123456`
-- `Policy-98765.docx` → policyId = `98765`
-- Any filename with 5+ consecutive digits → extracted as policyId (fallback)
-
 ---
 
 ## Run Unit Tests
@@ -254,55 +293,20 @@ cd backend
 npm test
 ```
 
-Expected output: **16 passing tests** covering:
-- `normaliseEmail` — lowercase, trim
-- `aggregateStatus` — PASS/FAIL/REVIEW precedence
-- `validateAttachment` — all status branches, case-insensitivity
-- `validate` — end-to-end including edge cases
-
----
-
-## SSO Configuration (Production)
-
-For real Microsoft SSO, update `manifest.xml`:
-
-```xml
-<WebApplicationInfo>
-  <Id>YOUR_REAL_AAD_CLIENT_ID</Id>
-  <Resource>api://localhost:3000/YOUR_REAL_AAD_CLIENT_ID</Resource>
-  ...
-</WebApplicationInfo>
-```
-
-Then in Azure Portal:
-1. Register an App Registration (AAD).
-2. Set Redirect URI to `https://localhost:3000`.
-3. Expose an API: `api://localhost:3000/{clientId}/access_as_user`.
-4. Add Microsoft Graph delegated permission: `User.Read`.
-5. Pre-authorize the Office client IDs (d3590ed6-52b3-… for Office desktop, etc.).
-
-In `backend/src/middleware/auth.ts`, replace the MVP stub with real JWT verification using the `jose` library.
-
----
-
-## Environment Variables
-
-### Backend (`backend/.env`)
-```env
-PORT=3001
-```
-
-### Add-in (`addin/.env` or set before `npm start`)
-```env
-BACKEND_BASE_URL=http://localhost:3001
-```
+Expected output: **28 passing tests** covering:
+* `normaliseEmail` — lowercase, trim
+* `aggregateStatus` — PASS/FAIL/REVIEW precedence
+* `validateAttachment` — all status branches, case-insensitivity
+* `validate` — end-to-end including edge cases
+* `extractPolicyIdFromText` — central, configurable regex matching
+* `Password protected PDF validation` — throwing error without password, incorrect password failure, and successful extraction with correct password
 
 ---
 
 ## Production Deployment Notes
 
 1. **HTTPS everywhere**: Host the add-in on a public HTTPS domain and update all `localhost:3000` references in `manifest.xml`.
-2. **Real policy client**: Replace `policyAdminClient.ts` stub with actual HTTP calls to your Policy Administration System.
-3. **Real JWT validation**: Implement signature verification in `auth.ts` using `jose` and Microsoft's JWKS endpoint.
-4. **Persistent override storage**: Replace the `Map` in `override.ts` with a database (e.g., Azure Cosmos DB, PostgreSQL).
+2. **In-Memory Store replacement**: Replace the simple map in `resultStore.ts` with a persistent cache (e.g. Redis) that has a configured TTL (Time To Live) to handle load-balanced environments with multiple users.
+3. **Real policy client**: Replace `policyAdminClient.ts` stub with actual API calls to your Policy Administration System.
+4. **Real JWT validation**: Implement signature verification in `auth.ts` using `jose` and Microsoft's JWKS endpoint.
 5. **Manifest submission**: Submit `manifest.xml` to your Microsoft 365 admin center for organization-wide deployment.

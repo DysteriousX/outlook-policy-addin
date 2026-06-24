@@ -10,15 +10,44 @@ import {
   aggregateStatus,
   validate,
   extractPolicyIdFromText,
+  PasswordRequiredError,
 } from "../src/services/validator";
 import type { PolicyAdminClient } from "../src/services/policyAdminClient";
 import type { AttachmentInput, AttachmentResult } from "../src/types";
 
-// Mock pdf-parse to return the buffer contents as text directly for easy test verification
+// Mock pdf-parse named exports to return buffer text or raise PasswordException
+class MockPasswordException extends Error {
+  constructor(message?: string) {
+    super(message || "Password exception");
+    this.name = "PasswordException";
+  }
+}
+
 jest.mock("pdf-parse", () => {
-  return jest.fn().mockImplementation((buffer: Buffer) => {
-    return Promise.resolve({ text: buffer.toString("utf8") });
-  });
+  class PasswordException extends Error {
+    constructor(message?: string) {
+      super(message || "Password exception");
+      this.name = "PasswordException";
+    }
+  }
+
+  return {
+    PasswordException,
+    PDFParse: jest.fn().mockImplementation((options: { data: Buffer; password?: string }) => {
+      return {
+        getText: async () => {
+          const text = options.data.toString("utf8");
+          if (text.includes("PASSWORD_PROTECTED")) {
+            if (options.password !== "correct_password") {
+              throw new PasswordException();
+            }
+            return { text: "This is decrypted text with Policy No: 123456" };
+          }
+          return { text };
+        }
+      };
+    })
+  };
 });
 
 // ─── Mock Policy Admin Client ─────────────────────────────────────────────────
@@ -285,6 +314,53 @@ describe("validate", () => {
         att,
         ["holder1@example.com"],
         mockClient
+      );
+
+      expect(result.status).toBe("PASS");
+      expect(result.policyId).toBe("123456");
+    });
+  });
+
+  describe("Password protected PDF validation", () => {
+    it("throws PasswordRequiredError when PDF is password protected and no password is provided", async () => {
+      const att: AttachmentInput = {
+        id: "pdf-password-test",
+        name: "locked.pdf",
+        size: 5000,
+        content: Buffer.from("PASSWORD_PROTECTED content").toString("base64"),
+      };
+
+      await expect(
+        validateAttachment(att, ["holder1@example.com"], mockClient)
+      ).rejects.toThrow(PasswordRequiredError);
+    });
+
+    it("throws PasswordRequiredError when PDF is password protected and incorrect password is provided", async () => {
+      const att: AttachmentInput = {
+        id: "pdf-password-test",
+        name: "locked.pdf",
+        size: 5000,
+        content: Buffer.from("PASSWORD_PROTECTED content").toString("base64"),
+      };
+
+      await expect(
+        validateAttachment(att, ["holder1@example.com"], mockClient, "wrong_password")
+      ).rejects.toThrow(PasswordRequiredError);
+    });
+
+    it("extracts policy ID when PDF is password protected and correct password is provided", async () => {
+      const att: AttachmentInput = {
+        id: "pdf-password-test",
+        name: "locked.pdf",
+        size: 5000,
+        content: Buffer.from("PASSWORD_PROTECTED content").toString("base64"),
+      };
+
+      const result = await validateAttachment(
+        att,
+        ["holder1@example.com"],
+        mockClient,
+        "correct_password"
       );
 
       expect(result.status).toBe("PASS");
