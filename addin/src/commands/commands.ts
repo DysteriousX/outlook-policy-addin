@@ -197,10 +197,11 @@ export async function ValidateRecipients(
       return;
     }
 
-    // 3. Fetch Base64 PDF contents in parallel.
+    // 3. Fetch Base64 PDF and ZIP contents in parallel.
     const attachmentsWithContent = await Promise.all(
       attachments.map(async (att) => {
-        if (att.name.toLowerCase().endsWith(".pdf")) {
+        const lowerName = att.name.toLowerCase();
+        if (lowerName.endsWith(".pdf") || lowerName.endsWith(".zip")) {
           try {
             const content = await getAttachmentContent(att.id);
             return { ...att, content };
@@ -279,7 +280,7 @@ function openResultDialog(
 
     Office.context.ui.displayDialogAsync(
       dialogUrl,
-      { height: 70, width: 60, displayInIframe: false },
+      { height: 70, width: 60, displayInIframe: true, promptBeforeOpen: false },
       (asyncResult) => {
         if (asyncResult.status === Office.AsyncResultStatus.Failed) {
           console.error(

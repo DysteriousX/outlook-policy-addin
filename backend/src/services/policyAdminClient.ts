@@ -13,6 +13,16 @@
 const POLICY_EMAIL_MAP: Record<string, string[]> = {
   "123456": ["holder1@example.com"],
   "98765":  ["holder2@example.com", "holder2.alt@example.com"],
+  "31483805": ["oan.chimseng@example.com", "holder1@example.com"],
+  "102-2503351": ["tan.yunhao.alson@example.com", "holder2@example.com"],
+  "11507168": ["gouw.tamadavidpriatna@example.com", "holder1@example.com"],
+  "11519001": ["lim.zaiwang@example.com", "holder1@example.com"],
+  "11553719": ["chan.puikinbenny@example.com", "holder2@example.com"],
+  "31247362": ["qiu.meiyan@example.com", "holder1@example.com"],
+  "50216834": ["ooi.khailin@example.com", "holder1@example.com"],
+  "BGDP241000301-01-000": ["guohao.goh@example.com", "holder2@example.com"],
+  "200-0028388": ["lee.samuelyikai@example.com", "holder1@example.com"],
+  "K000234148": ["lee.samuelyikai@example.com", "holder1@example.com"],
 };
 
 export interface PolicyAdminClient {

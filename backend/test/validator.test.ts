@@ -50,12 +50,44 @@ jest.mock("pdf-parse", () => {
   };
 });
 
+jest.mock("adm-zip", () => {
+  return jest.fn().mockImplementation((buffer: Buffer) => {
+    return {
+      getEntries: () => {
+        try {
+          const entries = JSON.parse(buffer.toString("utf8"));
+          if (Array.isArray(entries)) {
+            return entries.map((e) => ({
+              name: e.name,
+              isDirectory: !!e.isDirectory,
+              getData: () => Buffer.from(e.content, "utf8"),
+            }));
+          }
+        } catch (err) {
+          // ignore
+        }
+        return [];
+      },
+    };
+  });
+});
+
 // ─── Mock Policy Admin Client ─────────────────────────────────────────────────
 const mockClient: PolicyAdminClient = {
   getAuthorisedEmails: jest.fn(async (policyId: string): Promise<string[]> => {
     const map: Record<string, string[]> = {
       "123456": ["holder1@example.com"],
       "98765":  ["holder2@example.com", "holder2.alt@example.com"],
+      "31483805": ["oan.chimseng@example.com", "holder1@example.com"],
+      "102-2503351": ["tan.yunhao.alson@example.com", "holder2@example.com"],
+      "11507168": ["gouw.tamadavidpriatna@example.com", "holder1@example.com"],
+      "11519001": ["lim.zaiwang@example.com", "holder1@example.com"],
+      "11553719": ["chan.puikinbenny@example.com", "holder2@example.com"],
+      "31247362": ["qiu.meiyan@example.com", "holder1@example.com"],
+      "50216834": ["ooi.khailin@example.com", "holder1@example.com"],
+      "BGDP241000301-01-000": ["guohao.goh@example.com", "holder2@example.com"],
+      "200-0028388": ["lee.samuelyikai@example.com", "holder1@example.com"],
+      "K000234148": ["lee.samuelyikai@example.com", "holder1@example.com"],
     };
     return map[policyId] ?? [];
   }),
@@ -120,8 +152,8 @@ describe("validateAttachment", () => {
   it("returns REVIEW when no policyId", async () => {
     const att: AttachmentInput = { id: "a1", name: "invoice.pdf", size: 1000 };
     const result = await validateAttachment(att, recipients, mockClient);
-    expect(result.status).toBe("REVIEW");
-    expect(result.policyId).toBeUndefined();
+    expect(result[0].status).toBe("REVIEW");
+    expect(result[0].policyId).toBeUndefined();
     expect(mockClient.getAuthorisedEmails).not.toHaveBeenCalled();
   });
 
@@ -133,8 +165,8 @@ describe("validateAttachment", () => {
       policyId: "999999",
     };
     const result = await validateAttachment(att, recipients, mockClient);
-    expect(result.status).toBe("REVIEW");
-    expect(result.authorisedEmails).toHaveLength(0);
+    expect(result[0].status).toBe("REVIEW");
+    expect(result[0].authorisedEmails).toHaveLength(0);
   });
 
   it("returns PASS when all recipients are authorised", async () => {
@@ -145,9 +177,9 @@ describe("validateAttachment", () => {
       policyId: "123456",
     };
     const result = await validateAttachment(att, ["holder1@example.com"], mockClient);
-    expect(result.status).toBe("PASS");
-    expect(result.mismatchedRecipients).toHaveLength(0);
-    expect(result.authorisedEmails).toEqual(["holder1@example.com"]);
+    expect(result[0].status).toBe("PASS");
+    expect(result[0].mismatchedRecipients).toHaveLength(0);
+    expect(result[0].authorisedEmails).toEqual(["holder1@example.com"]);
   });
 
   it("returns FAIL when a recipient is not authorised", async () => {
@@ -162,9 +194,9 @@ describe("validateAttachment", () => {
       ["holder1@example.com", "intruder@evil.com"],
       mockClient
     );
-    expect(result.status).toBe("FAIL");
-    expect(result.mismatchedRecipients).toContain("intruder@evil.com");
-    expect(result.mismatchedRecipients).not.toContain("holder1@example.com");
+    expect(result[0].status).toBe("FAIL");
+    expect(result[0].mismatchedRecipients).toContain("intruder@evil.com");
+    expect(result[0].mismatchedRecipients).not.toContain("holder1@example.com");
   });
 
   it("is case-insensitive for recipient matching", async () => {
@@ -180,8 +212,8 @@ describe("validateAttachment", () => {
       ["HOLDER1@EXAMPLE.COM"], // uppercase recipient
       mockClient
     );
-    expect(result.status).toBe("PASS");
-    expect(result.mismatchedRecipients).toHaveLength(0);
+    expect(result[0].status).toBe("PASS");
+    expect(result[0].mismatchedRecipients).toHaveLength(0);
   });
 
   it("handles multiple authorised emails (policyId 98765)", async () => {
@@ -196,7 +228,7 @@ describe("validateAttachment", () => {
       ["holder2@example.com", "holder2.alt@example.com"],
       mockClient
     );
-    expect(result.status).toBe("PASS");
+    expect(result[0].status).toBe("PASS");
   });
 });
 
@@ -292,6 +324,35 @@ describe("validate", () => {
       expect(extractPolicyIdFromText("Policy# 123456")).toBe("123456");
     });
 
+    it("extracts from image-derived policy number patterns", () => {
+      // Image 1: Policy Number: 31483805
+      expect(extractPolicyIdFromText("Policy Number:             31483805")).toBe("31483805");
+      // Image 2: Policy number           : 102-2503351
+      expect(extractPolicyIdFromText("Policy number           : 102-2503351")).toBe("102-2503351");
+      // Image 3: Policy/ Certificate number   : 11507168 (HSBC Life Goal Builder-SGD 5P)
+      expect(extractPolicyIdFromText("Policy/ Certificate number   : 11507168 (HSBC Life Goal Builder-SGD 5P)")).toBe("11507168");
+      
+      // Image 4: Policy Number : 11519001
+      expect(extractPolicyIdFromText("Policy Number : 11519001")).toBe("11519001");
+      // Image 5: Policy Number : 11553719
+      expect(extractPolicyIdFromText("Policy Number\t: 11553719")).toBe("11553719");
+      // Image 6: Policy No. : 31247362
+      expect(extractPolicyIdFromText("Policy No. : 31247362")).toBe("31247362");
+
+      // Image 7: Policy Number: 50216834
+      expect(extractPolicyIdFromText("Policy Number:\n50216834")).toBe("50216834");
+      // Image 8: Policy Number:  BGDP241000301-01-000
+      expect(extractPolicyIdFromText("Policy Number:\nBGDP241000301-01-000")).toBe("BGDP241000301-01-000");
+      // Image 9: Application / Policy number: 200-0028388 / K000234148
+      expect(extractPolicyIdFromText("Application / Policy number: 200-0028388 / K000234148")).toBe("200-0028388");
+    });
+
+    it("extracts standalone alphanumeric and hyphenated policy IDs (Patterns 3 and 4)", () => {
+      expect(extractPolicyIdFromText("This document references BGDP241000301-01-000 for verification")).toBe("BGDP241000301-01-000");
+      expect(extractPolicyIdFromText("User id: K000234148")).toBe("K000234148");
+      expect(extractPolicyIdFromText("Ref: 102-2503351")).toBe("102-2503351");
+    });
+
     it("extracts from fallback standalone digit sequences", () => {
       expect(extractPolicyIdFromText("Reference ID 98765 is active")).toBe("98765");
     });
@@ -316,8 +377,8 @@ describe("validate", () => {
         mockClient
       );
 
-      expect(result.status).toBe("PASS");
-      expect(result.policyId).toBe("123456");
+      expect(result[0].status).toBe("PASS");
+      expect(result[0].policyId).toBe("123456");
     });
   });
 
@@ -363,8 +424,119 @@ describe("validate", () => {
         "correct_password"
       );
 
-      expect(result.status).toBe("PASS");
-      expect(result.policyId).toBe("123456");
+      expect(result[0].status).toBe("PASS");
+      expect(result[0].policyId).toBe("123456");
+    });
+  });
+
+  describe("ZIP attachments validation", () => {
+    it("extracts policy ID from entry filenames inside ZIP", async () => {
+      const mockZipData = [
+        { name: "POL123456_summary.pdf", content: "plain text" },
+        { name: "random_image.png", content: "image data" }
+      ];
+      const att: AttachmentInput = {
+        id: "zip-filename-test",
+        name: "archive.zip",
+        size: 2000,
+        content: Buffer.from(JSON.stringify(mockZipData)).toString("base64"),
+      };
+
+      const result = await validateAttachment(
+        att,
+        ["holder1@example.com"],
+        mockClient
+      );
+
+      expect(result[0].status).toBe("PASS");
+      expect(result[0].policyId).toBe("123456");
+      expect(result[0].authorisedEmails).toEqual(["holder1@example.com"]);
+    });
+
+    it("extracts policy ID from PDF content inside ZIP", async () => {
+      const mockZipData = [
+        { name: "invoice.pdf", content: "This is PDF content with Policy Number: 98765" }
+      ];
+      const att: AttachmentInput = {
+        id: "zip-pdf-content-test",
+        name: "archive.zip",
+        size: 3000,
+        content: Buffer.from(JSON.stringify(mockZipData)).toString("base64"),
+      };
+
+      const result = await validateAttachment(
+        att,
+        ["holder2@example.com"],
+        mockClient
+      );
+
+      expect(result[0].status).toBe("PASS");
+      expect(result[0].policyId).toBe("98765");
+      expect(result[0].authorisedEmails).toContain("holder2@example.com");
+    });
+
+    it("validates recipients against multiple policy IDs found in ZIP", async () => {
+      const mockZipData = [
+        { name: "POL123456.pdf", content: "content" },
+        { name: "doc.pdf", content: "contains Policy No 98765" }
+      ];
+      const att: AttachmentInput = {
+        id: "zip-multi-policy",
+        name: "archive.zip",
+        size: 4000,
+        content: Buffer.from(JSON.stringify(mockZipData)).toString("base64"),
+      };
+
+      const result = await validateAttachment(
+        att,
+        ["holder1@example.com", "holder2@example.com"],
+        mockClient
+      );
+      expect(result).toHaveLength(2);
+      expect(result[0].status).toBe("FAIL");
+      expect(result[1].status).toBe("FAIL");
+      expect(result[0].policyId).toBe("123456");
+      expect(result[1].policyId).toBe("98765");
+      expect(result[0].mismatchedRecipients).toContain("holder2@example.com");
+      expect(result[1].mismatchedRecipients).toContain("holder1@example.com");
+    });
+
+    it("throws PasswordRequiredError when a PDF inside ZIP is password protected", async () => {
+      const mockZipData = [
+        { name: "locked.pdf", content: "PASSWORD_PROTECTED content" }
+      ];
+      const att: AttachmentInput = {
+        id: "zip-locked-test",
+        name: "archive.zip",
+        size: 2000,
+        content: Buffer.from(JSON.stringify(mockZipData)).toString("base64"),
+      };
+
+      await expect(
+        validateAttachment(att, ["holder1@example.com"], mockClient)
+      ).rejects.toThrow(PasswordRequiredError);
+    });
+
+    it("successfully decrypts locked PDF inside ZIP when correct password is provided", async () => {
+      const mockZipData = [
+        { name: "locked.pdf", content: "PASSWORD_PROTECTED content" }
+      ];
+      const att: AttachmentInput = {
+        id: "zip-locked-test",
+        name: "archive.zip",
+        size: 2000,
+        content: Buffer.from(JSON.stringify(mockZipData)).toString("base64"),
+      };
+
+      const result = await validateAttachment(
+        att,
+        ["holder1@example.com"],
+        mockClient,
+        "correct_password"
+      );
+
+      expect(result[0].status).toBe("PASS");
+      expect(result[0].policyId).toBe("123456");
     });
   });
 });

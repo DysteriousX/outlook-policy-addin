@@ -41,12 +41,18 @@ async function getSsoToken(): Promise<string> {
  * Build common fetch headers including the SSO bearer token.
  */
 async function buildHeaders(): Promise<HeadersInit> {
-  const token = await getSsoToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+
+  // Office SSO is not supported inside dialog windows and calling getAccessToken there will hang.
+  const isDialog = typeof window !== "undefined" && window.location && window.location.pathname.includes("dialog.html");
+
+  if (!isDialog) {
+    const token = await getSsoToken();
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
   }
   return headers;
 }

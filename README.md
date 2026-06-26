@@ -6,11 +6,12 @@ A production-ready MVP Outlook Add-in that validates email recipients against au
 
 ## Key Features
 
-1. **Production-Grade PDF Text Extraction:** Parses attached PDF files on the backend to extract policy numbers from the page text.
-2. **Flexible & Configurable Regex:** Extraction regex patterns are configured in a central configuration file (`backend/src/config.ts`).
-3. **Parallel Attachment Reading:** Processes multiple attachments in parallel, reading Base64 contents asynchronously on the client and parsing them concurrently on the backend.
-4. **Password-Protected PDF Support:** Detects encrypted PDFs, prompting the user securely inside the review dialog for the password and validating it against the backend. All encrypted PDFs in a single email are assumed to share the same password.
-5. **Read-Only Review Screen:** Displays validation statuses and mismatched recipients in a clean, read-only table interface. The Warn & Override form has been removed.
+1. **ZIP Container Support:** Automatically extracts and processes files inside `.zip` attachments. If any contained files are PDFs, they are parsed and scanned for policy IDs.
+2. **Production-Grade PDF Text Extraction:** Parses attached PDF files (standalone or inside a ZIP) on the backend to extract policy numbers from the page text.
+3. **Flexible & Configurable Regex:** Extraction regex patterns are configured in a central configuration file (`backend/src/config.ts`).
+4. **Parallel Attachment Reading:** Processes multiple attachments in parallel, reading Base64 contents asynchronously on the client and parsing them concurrently on the backend.
+5. **Password-Protected PDF Support:** Detects encrypted PDFs (including inside ZIPs), prompting the user securely inside the review dialog for the password and validating it against the backend. All encrypted PDFs in a single email are assumed to share the same password.
+6. **Read-Only Review Screen:** Displays validation statuses and mismatched recipients in a clean, read-only table interface. The Warn & Override form has been removed.
 
 ---
 
@@ -47,11 +48,11 @@ outlook-policy-addin/
     │   ├── services/
     │   │   ├── policyAdminClient.ts # Stubbed policy lookup
     │   │   ├── resultStore.ts      # In-memory store caching results & pending requests
-    │   │   └── validator.ts        # Pure validation logic (pdf-parse integration)
+    │   │   └── validator.ts        # Pure validation logic (pdf-parse & adm-zip integration)
     │   └── middleware/
     │       └── auth.ts             # JWT extraction (MVP, no sig verification)
     ├── test/
-    │   └── validator.test.ts       # Jest unit tests
+    │   └── validator.test.ts       # Jest unit tests (including adm-zip mocks)
     ├── package.json
     └── tsconfig.json
 ```
@@ -177,6 +178,13 @@ https://localhost:3000/taskpane/taskpane.html  → taskpane placeholder
 * Enter the password (`correct_password` in mock setup) and click **Validate**.
 * The password card disappears and the read-only review screen renders the successfully validated attachment results.
 
+#### Scenario D: ZIP Container Validation
+* Create a ZIP file containing multiple PDFs (e.g. `invoice.pdf` containing policy ID `123456` and `POL98765.pdf` representing policy ID `98765`).
+* Attach the ZIP file to the email.
+* Add recipients `holder1@example.com` and `holder2@example.com`.
+* Click **Validate Recipients**.
+* If both policy IDs are fully authorised for the recipients, it will PASS. If any recipient is unauthorised for either policy ID inside the ZIP, it will FAIL.
+
 ---
 
 ## Backend API Reference
@@ -193,7 +201,7 @@ Sends recipient list + attachment metadata and Base64 content to the backend.
   "attachments": [
     { 
       "id": "att1", 
-      "name": "invoice.pdf", 
+      "name": "archive.zip", 
       "size": 12345, 
       "content": "JVBERi0xLjQKJ..." 
     }
@@ -202,17 +210,26 @@ Sends recipient list + attachment metadata and Base64 content to the backend.
 ```
 
 **Response (200 - Pass):**
+If the ZIP contains multiple policy IDs (e.g. `123456` and `98765`), they are returned as individual entries:
 ```json
 {
   "overallStatus": "PASS",
   "auditRef": "AUD-AB12CD34",
   "attachmentResults": [
     {
-      "id": "att1",
-      "name": "invoice.pdf",
+      "id": "att1/POL123456.pdf",
+      "name": "archive.zip / POL123456.pdf",
       "policyId": "123456",
       "status": "PASS",
       "authorisedEmails": ["holder1@example.com"],
+      "mismatchedRecipients": []
+    },
+    {
+      "id": "att1/invoice.pdf",
+      "name": "archive.zip / invoice.pdf",
+      "policyId": "98765",
+      "status": "PASS",
+      "authorisedEmails": ["holder2@example.com", "holder2.alt@example.com"],
       "mismatchedRecipients": []
     }
   ]
@@ -220,7 +237,7 @@ Sends recipient list + attachment metadata and Base64 content to the backend.
 ```
 
 **Response (200 - Password Required):**
-If a PDF is password protected, the backend caches the payload and returns:
+If any PDF inside the ZIP is password protected, the backend caches the payload and returns:
 ```json
 {
   "overallStatus": "PASSWORD_REQUIRED",
@@ -228,7 +245,7 @@ If a PDF is password protected, the backend caches the payload and returns:
   "attachmentResults": [
     {
       "id": "att1",
-      "name": "locked.pdf",
+      "name": "archive.zip",
       "policyId": null,
       "status": "REVIEW",
       "authorisedEmails": [],
@@ -236,42 +253,6 @@ If a PDF is password protected, the backend caches the payload and returns:
       "reason": "Password required"
     }
   ]
-}
-```
-
-#### 2. Password Submission Request
-Once the user enters the password in the dialog, the client submits:
-
-**Request:**
-```json
-{
-  "auditRef": "AUD-PENDING12",
-  "password": "correct_password"
-}
-```
-
-**Response (200 - Success):**
-```json
-{
-  "overallStatus": "PASS",
-  "auditRef": "AUD-PENDING12",
-  "attachmentResults": [
-    {
-      "id": "att1",
-      "name": "locked.pdf",
-      "policyId": "123456",
-      "status": "PASS",
-      "authorisedEmails": ["holder1@example.com"],
-      "mismatchedRecipients": []
-    }
-  ]
-}
-```
-
-**Response (400 - Incorrect Password):**
-```json
-{
-  "error": "INCORRECT_PASSWORD"
 }
 ```
 
@@ -293,20 +274,21 @@ cd backend
 npm test
 ```
 
-Expected output: **28 passing tests** covering:
+Expected output: **33 passing tests** covering:
 * `normaliseEmail` — lowercase, trim
 * `aggregateStatus` — PASS/FAIL/REVIEW precedence
-* `validateAttachment` — all status branches, case-insensitivity
+* `validateAttachment` — all status branches, case-insensitivity, PDF text parsing
 * `validate` — end-to-end including edge cases
-* `extractPolicyIdFromText` — central, configurable regex matching
+* `extractPolicyIdFromText` / `extractPolicyIdFromFilename` — central, configurable regex matching
 * `Password protected PDF validation` — throwing error without password, incorrect password failure, and successful extraction with correct password
+* `ZIP attachments validation` — extracting files from archives, parsing multiple inner PDFs, aggregating statuses, and decrypting inner password-protected PDFs
 
 ---
 
 ## Production Deployment Notes
 
 1. **HTTPS everywhere**: Host the add-in on a public HTTPS domain and update all `localhost:3000` references in `manifest.xml`.
-2. **In-Memory Store replacement**: Replace the simple map in `resultStore.ts` with a persistent cache (e.g. Redis) that has a configured TTL (Time To Live) to handle load-balanced environments with multiple users.
+2. **In-Memory Store replacement**: Replace the simple map in `resultStore.ts` with a database or cache (e.g. Redis) that has a configured TTL (Time To Live).
 3. **Real policy client**: Replace `policyAdminClient.ts` stub with actual API calls to your Policy Administration System.
 4. **Real JWT validation**: Implement signature verification in `auth.ts` using `jose` and Microsoft's JWKS endpoint.
 5. **Manifest submission**: Submit `manifest.xml` to your Microsoft 365 admin center for organization-wide deployment.
